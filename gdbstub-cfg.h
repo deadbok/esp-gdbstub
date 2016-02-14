@@ -6,7 +6,14 @@ Enable this define if you're using the RTOS SDK. It will use a custom exception 
 and do some other magic to make everything work and compile under FreeRTOS.
 */
 #ifndef GDBSTUB_FREERTOS
-#define GDBSTUB_FREERTOS 1
+#define GDBSTUB_FREERTOS 0
+#endif
+
+/*
+Enable this define if you're using the esp-open-rtos version of FreeRTOS.
+*/
+#ifndef GDBSTUB_ESP_OPEN_RTOS
+#define GDBSTUB_ESP_OPEN_RTOS 1
 #endif
 
 /*
@@ -26,7 +33,7 @@ work for your program anymore. This will fail if your program sets an UART inter
 the gdbstub_init call.
 */
 #ifndef GDBSTUB_CTRLC_BREAK
-#define GDBSTUB_CTRLC_BREAK 1
+#define GDBSTUB_CTRLC_BREAK 0
 #endif
 
 /*
@@ -55,8 +62,14 @@ flash somehow is disabled (eg during SPI operations or flash write/erase operati
 are called when the flash is disabled (eg due to a Ctrl-C at the wrong time), the ESP8266 will most 
 likely crash.
 */
+#if !GDBSTUB_ESP_OPEN_RTOS
 #define ATTR_GDBINIT	ICACHE_FLASH_ATTR
-#define ATTR_GDBFN		
+#define ATTR_GDBFN 
+#else
+#define ATTR_GDBINIT
+#define ATTR_GDBFN 		IRAM
+#endif
+
 
 #endif
 

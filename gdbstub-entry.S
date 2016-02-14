@@ -165,7 +165,7 @@ DebugExceptionExit:
 
 
 
-#if GDBSTUB_FREERTOS
+#if GDBSTUB_FREERTOS || GDBSTUB_ESP_OPEN_RTOS
 /*
 FreeRTOS exception handling code. For some reason or another, we can't just hook the main exception vector: it
 seems FreeRTOS uses that for something else too (interrupts). FreeRTOS has its own fatal exception handler, and we
@@ -183,9 +183,15 @@ the user exception handler vector:
 	sf: magic no?
 */
 	.global gdbstub_handle_user_exception
+#if GDBSTUB_ESP_OPEN_RTOS
+	.global sdk_user_fatal_exception_handler
+	.align 4
+sdk_user_fatal_exception_handler:
+#else
 	.global gdbstub_user_exception_entry
 	.align	4
 gdbstub_user_exception_entry:
+#endif
 //Save all regs to structure
 	movi	a0, gdbstub_savedRegs
 	s32i	a1, a0, 0x14 //was a2
@@ -246,6 +252,7 @@ FreeRTOS to allow this in the future. (Which will then kill backwards compatibil
 
 
 	.global gdbstub_handle_uart_int
+#if GDBSTUB_CTRLC_BREAK
 	.global gdbstub_uart_entry
 	.align	4
 gdbstub_uart_entry:
@@ -255,6 +262,7 @@ gdbstub_uart_entry:
 	add		a2, a2, a1
 	movi	a3, gdbstub_handle_uart_int
 	jx		a3
+#endif
 
 #endif
 
@@ -277,13 +285,20 @@ gdbstub_save_extra_sfrs_for_exception:
 	ret
 
 	.global gdbstub_init_debug_entry
+	
+#if !GDBSTUB_ESP_OPEN_RTOS
 	.global _DebugExceptionVector
+#endif
 	.align	4
 gdbstub_init_debug_entry:
 //This puts the following 2 instructions into the debug exception vector:
 //	xsr	a2, DEBUG_EXCSAVE
 //	jx	a2
+#if GDBSTUB_ESP_OPEN_RTOS
+	movi	a2, VecBase + 0x10
+#else
 	movi	a2, _DebugExceptionVector
+#endif
 	movi	a3, 0xa061d220
 	s32i	a3, a2, 0
 	movi	a3, 0x00000002

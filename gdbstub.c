@@ -6,12 +6,18 @@
  *
  * License: ESPRESSIF MIT License
  *******************************************************************************/
-
+#if GDBSTUB_ESP_OPEN_RTOS
+#include <stdint.h>
+#include "common_macros.h"
+#include <esp/interrupts.h>
+#include "espressif/esp_common.h"
+#else
 #include "gdbstub.h"
 #include "ets_sys.h"
 #include "eagle_soc.h"
 #include "c_types.h"
 #include "gpio.h"
+#endif //GDBSTUB_ESP_OPEN_RTOS
 #include "xtensa/corebits.h"
 
 #include "gdbstub.h"
@@ -53,9 +59,22 @@ also sets up some function pointers for ROM functions that aren't in the FreeRTO
 */
 #include <string.h>
 #include <stdio.h>
+
 void _xt_isr_attach(int inum, void *fn);
 void _xt_isr_unmask(int inum);
 void os_install_putc1(void (*p)(char c));
+#define os_printf(...) printf(__VA_ARGS__)
+#define os_memcpy(a,b,c) memcpy(a,b,c)
+typedef void wdtfntype();
+static wdtfntype *ets_wdt_disable=(wdtfntype *)0x400030f0;
+static wdtfntype *ets_wdt_enable=(wdtfntype *)0x40002fa0;
+
+#elif GDBSTUB_ESP_OPEN_RTOS
+/* Definitions for esp-open-rtos. */
+#include <string.h>
+#include <stdio.h>
+
+#define os_install_putc1 sdk_os_install_putc1
 #define os_printf(...) printf(__VA_ARGS__)
 #define os_memcpy(a,b,c) memcpy(a,b,c)
 typedef void wdtfntype();
@@ -80,13 +99,21 @@ int os_printf_plus(const char *format, ...)  __attribute__ ((format (printf, 1, 
 
 //We need some UART register defines.
 #define ETS_UART_INUM 5
+
+#if !GDBSTUB_ESP_OPEN_RTOS
 #define REG_UART_BASE( i )  (0x60000000+(i)*0xf00)
 #define UART_STATUS( i )                        (REG_UART_BASE( i ) + 0x1C)
+#endif
+
 #define UART_RXFIFO_CNT 0x000000FF
 #define UART_RXFIFO_CNT_S 0
 #define UART_TXFIFO_CNT 0x000000FF
 #define UART_TXFIFO_CNT_S                   16
+
+#if !GDBSTUB_ESP_OPEN_RTOS
 #define UART_FIFO( i )                          (REG_UART_BASE( i ) + 0x0)
+#endif
+
 #define UART_INT_ENA(i)                     (REG_UART_BASE(i) + 0xC)
 #define UART_INT_CLR(i)                 (REG_UART_BASE(i) + 0x10)
 #define UART_RXFIFO_TOUT_INT_ENA            (BIT(8))
@@ -602,7 +629,7 @@ void ATTR_GDBFN gdbstub_handle_debug_exception() {
 }
 
 
-#if GDBSTUB_FREERTOS
+#if GDBSTUB_FREERTOS || GDBSTUB_ESP_OPEN_RTOS
 //Freetos exception. This routine is called by an assembly routine in gdbstub-entry.S
 void ATTR_GDBFN gdbstub_handle_user_exception() {
 	ets_wdt_disable();
@@ -651,7 +678,7 @@ static void ATTR_GDBFN gdb_semihost_putchar1(char c) {
 }
 #endif
 
-#if !GDBSTUB_FREERTOS
+#if !GDBSTUB_FREERTOS && !GDBSTUB_ESP_OPEN_RTOS
 //The OS-less SDK uses the Xtensa HAL to handle exceptions. We can use those functions to catch any 
 //fatal exceptions and invoke the debugger when this happens.
 static void ATTR_GDBINIT install_exceptions() {
@@ -664,10 +691,12 @@ static void ATTR_GDBINIT install_exceptions() {
 		_xtos_set_exception_handler(exno[i], gdb_exception_handler);
 	}
 }
-#else
+
+#elif GDBSTUB_FREERTOS
 //FreeRTOS doesn't use the Xtensa HAL for exceptions, but uses its own fatal exception handler.
 //We use a small hack to replace that with a jump to our own handler, which then has the task of
 //decyphering and re-instating the registers the FreeRTOS code left.
+
 extern void user_fatal_exception_handler();
 extern void gdbstub_user_exception_entry();
 
@@ -677,13 +706,25 @@ static void ATTR_GDBINIT install_exceptions() {
 	//This mess encodes as a relative jump instruction to user_fatal_exception_handler
 	*ufe=((((int)gdbstub_user_exception_entry-(int)user_fatal_exception_handler)-4)<<6)|6;
 }
+
+#elif GDBSTUB_ESP_OPEN_RTOS
+
+//extern void sdk_user_fatal_exception_handler();
+//extern void gdbstub_user_exception_entry();
+
+//static void ATTR_GDBINIT install_exceptions() {
+	////Replace the user_fatal_exception_handler by a jump to our own code
+	//int *ufe=(int*)sdk_user_fatal_exception_handler;
+	////This mess encodes as a relative jump instruction to user_fatal_exception_handler
+	//*ufe=((((int)gdbstub_user_exception_entry-(int)sdk_user_fatal_exception_handler)-4)<<6)|6;
+//}
 #endif
 
 
 
 #if GDBSTUB_CTRLC_BREAK
 
-#if !GDBSTUB_FREERTOS
+#if !GDBSTUB_FREERTOS && !GDBSTUB_ESP_OPEN_RTOS
 
 static void ATTR_GDBFN uart_hdlr(void *arg, void *frame) {
 	int doDebug=0, fifolen=0;
@@ -773,12 +814,18 @@ static void ATTR_GDBINIT install_uart_hdlr() {
 //gdbstub initialization routine.
 void ATTR_GDBINIT gdbstub_init() {
 #if GDBSTUB_REDIRECT_CONSOLE_OUTPUT
-	os_install_putc1(gdb_semihost_putchar1);
+	#if GDBSTUB_ESP_OPEN_RTOS
+		sdk_os_install_putc1(gdb_semihost_putchar1);
+	#else
+		os_install_putc1(gdb_semihost_putchar1);
+	#endif
 #endif
 #if GDBSTUB_CTRLC_BREAK
 	install_uart_hdlr();
 #endif
+#if !GDBSTUB_ESP_OPEN_RTOS
 	install_exceptions();
+#endif
 	gdbstub_init_debug_entry();
 #if GDBSTUB_BREAK_ON_INIT
 	gdbstub_do_break();
